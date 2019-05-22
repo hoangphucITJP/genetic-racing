@@ -39,7 +39,7 @@
         let bestCarIndices = []
         let carCrashedOrder = []
 
-        const game = new Phaser.Game(gameWidth, gameHeight, Phaser.CANVAS, '', { preload: preload, create: create, update: update, render: render });
+        const game = new Phaser.Game(gameWidth, gameHeight, Phaser.AUTO, '', { preload: preload, create: create, update: update, render: render });
 
         function preload() {
             console.log(`Tensorflow backend: ${ tf.getBackend() }`);
@@ -366,13 +366,9 @@
         }
 
         function startNewGeneration() {
-            // while (bestCarIndices.length != 2) {
-            //     const index = Math.floor(Math.random() * 10);   
-            //     if (bestCarIndices.includes(index)) {
-            //         continue
-            //     }
-            //     bestCarIndices.push(index)
-            // }
+            if (bestCarIndices.length != 2) {
+                return
+            }
             console.log('Start new generation')
 
             const parentsGenes = bestCarIndices.map(index => {
