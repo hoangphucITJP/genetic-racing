@@ -26,10 +26,9 @@
         const sensorLength = 512
         const maxMutation = 0.5
         const carStartPoint = [40, 256]
+
         let generation = 1
-
         let cars = null
-
         let carsMinDiss = []
         let carsGenes = []
         let tracks = null
@@ -362,7 +361,7 @@
             }
             bestCarIndices.push(index)
 
-            console.log(bestCarIndices)
+            console.log(`bestCarIndices: ${bestCarIndices}`)
         }
 
         function startNewGeneration() {
@@ -400,7 +399,6 @@
                 if (combination < numOfCombination) {
                     let crossOverCode = combination.toString(2)
                     crossOverCode = '0'.repeat(3 - crossOverCode.length) + crossOverCode
-                    console.log(crossOverCode)
                     const { w1, b1} = parentsGenes[parseInt(crossOverCode[0])]
                     const { w21, b21} = parentsGenes[parseInt(crossOverCode[1])]
                     const { w22, b22} = parentsGenes[parseInt(crossOverCode[2])]                    
@@ -414,19 +412,12 @@
                 } else {  
                     const parentGene = parentsGenes[mutationIndex]     
                     const gene = tf.tidy(() => {
-                        const w1 = tf.randomUniform(parentGene.w1.shape, -maxMutation, maxMutation)
-                        const b1 = tf.randomUniform(parentGene.b1.shape, -maxMutation, maxMutation)
-                        const w21 = tf.randomUniform(parentGene.w21.shape, -maxMutation, maxMutation)
-                        const b21 = tf.randomUniform(parentGene.b21.shape, -maxMutation, maxMutation)
-                        const w22 = tf.randomUniform(parentGene.w22.shape, -maxMutation, maxMutation)
-                        const b22 = tf.randomUniform(parentGene.b22.shape, -maxMutation, maxMutation)
                         const tmpGene = {}
-                        tmpGene.w1 = parentGene.w1.add(w1).maximum(tf.zeros(w1.shape)).minimum(tf.ones(w1.shape))
-                        tmpGene.b1 = parentGene.b1.add(b1).maximum(tf.zeros(b1.shape)).minimum(tf.ones(b1.shape))
-                        tmpGene.w21 = parentGene.w21.add(w21).maximum(tf.zeros(w21.shape)).minimum(tf.ones(w21.shape))
-                        tmpGene.b21 = parentGene.b21.add(b21).maximum(tf.zeros(b21.shape)).minimum(tf.ones(b21.shape))
-                        tmpGene.w22 = parentGene.w22.add(w22).maximum(tf.zeros(w22.shape)).minimum(tf.ones(w22.shape))
-                        tmpGene.b22 = parentGene.b22.add(b22).maximum(tf.zeros(b22.shape)).minimum(tf.ones(b22.shape))
+                        for (var key in parentGene) {
+                            const orignalTensor = parentGene[key]
+                            let randomVariance = tf.randomUniform(orignalTensor.shape, -maxMutation, maxMutation)
+                            tmpGene[key] = orignalTensor.add(randomVariance).maximum(tf.zeros(orignalTensor.shape)).minimum(tf.ones(orignalTensor.shape))
+                        } 
                         return tmpGene
                     })
                     
