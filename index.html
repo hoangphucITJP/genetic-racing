@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Cars</title>
+    <script src="//cdn.jsdelivr.net/phaser/2.6.2/phaser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/synaptic/1.1.4/synaptic.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.0.0/dist/tf.min.js"></script>
+    <style type="text/css">
+        body {
+            margin: 0;
+        }
+    </style>
+</head>
+
+<body>
+    <script type="text/javascript">
+        const gameWidth = 512;
+        const gameHeight = 512;
+        const trackThickness = 1
+        const trackWidth = 100
+        const numOfCars = 20
+        const maxSpeed = 300
+        const maxSteer = 15
+        const sensorLength = 512
+        const maxMutation = 0.5
+        const carStartPoint = [40, 256]
+        let generation = 1
+
+        let cars = null
+
+        let carsMinDiss = []
+        let carsGenes = []
+        let tracks = null
+        let carsSpeed = []
+        let carsSensors = []
+        let carsModel = []
+        let bestCarIndices = []
+        let carCrashedOrder = []
+
+        const game = new Phaser.Game(gameWidth, gameHeight, Phaser.CANVAS, '', { preload: preload, create: create, update: update, render: render });
+
+        function preload() {
+            console.log(`Tensorflow backend: ${ tf.getBackend() }`);
+            game.load.image('car', 'assets/car.png');
+
+            tracks = [
+                [0, 0, gameWidth, 0],
+                [0, gameHeight, gameWidth, gameHeight],
+                [0, 0, 0, gameHeight],
+                [gameWidth, 0, gameWidth, gameHeight],
+
+                [trackWidth, trackWidth, gameWidth - trackWidth, trackWidth],
+                [trackWidth, gameHeight - trackWidth, gameWidth - trackWidth, gameHeight - trackWidth],
+                [trackWidth, trackWidth, trackWidth, gameHeight - trackWidth],
+                [gameWidth - trackWidth, trackWidth, gameWidth - trackWidth, gameHeight - trackWidth],
+            ]
+            tracks = tracks.map(line => {
+                return new Phaser.Line(line[0], line[1], line[2], line[3]);
+            })
+
+            const fKey = game.input.keyboard.addKey(Phaser.Keyboard.F);
+            fKey.onDown.add(startNewGeneration, this);
+
+            for (i = 0; i < numOfCars; i += 1) {
+                carsSpeed.push(0)
+
+                let sensors = [
+                    [new Phaser.Line(), 0],
+                    [new Phaser.Line(), Math.PI / 4],
+                    [new Phaser.Line(), Math.PI / 2],
+                    [new Phaser.Line(), Math.PI * 3 / 4],
+                    [new Phaser.Line(), Math.PI],
+                ]
+                carsSensors.push(sensors)
+                carsMinDiss.push([])
+
+                const gene = randomizeGene()
+                carsGenes.push(gene)
+            }
+        }
+
+        function randomizeGene() {
+            const w1 = tf.randomUniform([6, 4])
+            const b1 = tf.randomUniform([4])
+            const w21 = tf.randomUniform([4, 3])
+            const b21 = tf.randomUniform([3])
+            const w22 = tf.randomUniform([4, 3])
+            const b22 = tf.randomUniform([3])
+            const gene = {
+                w1: w1, b1: b1,
+                w21: w21, b21: b21,
+                w22: w22, b22: b22
+            }
+            return gene
+        }
+
+        function create() {
+            game.physics.startSystem(Phaser.Physics.ARCADE);
+
+            track = game.add.group();
+            track.enableBody = true;
+            createTrack(track)
+            createCars()            
+        }
+
+        function createCars() {
+            cars = game.add.group();
+            cars.enableBody = true;
+            cars.inputEnableChildren = true;
+
+            for (i = 0; i < numOfCars; i++) {
+                car = cars.create(carStartPoint[0], carStartPoint[1], 'car');
+                car.scale.setTo(0.03, 0.03);
+                car.anchor.setTo(0.5, 0.5);
+                car.body.stopVelocityOnCollide = true
+            }
+            
+            cars.onChildInputDown.add(onDown, this)
+        }
+
+        function createTrack(track) {
+            // create a new bitmap data object
+            const bmd = game.add.bitmapData(128, 128);
+
+            // draw to the canvas context like normal
+            bmd.ctx.beginPath();
+            bmd.ctx.rect(0, 0, 128, 128);
+            bmd.ctx.fillStyle = '#00ffff'; // TODO: Change this color
+            bmd.ctx.fill();
+
+            const boundOutTop = track.create(0, 0, bmd);
+            const boundOutBottom = track.create(0, gameHeight - trackThickness, bmd);
+            const boundOutLeft = track.create(0, 0, bmd);
+            const boundOutRight = track.create(gameWidth - trackThickness, 0, bmd);
+
+            const boundInTop = track.create(trackWidth + trackThickness, trackWidth + trackThickness, bmd);
+            const boundInBottom = track.create(trackWidth + trackThickness, gameHeight - 2 * trackThickness - trackWidth, bmd);
+            const boundInLeft = track.create(trackWidth + trackThickness, trackWidth + trackThickness, bmd);
+            const boundInRight = track.create(gameWidth - 2 * trackThickness - trackWidth, trackWidth + trackThickness, bmd);
+
+            boundOutTop.width = gameWidth;
+            boundOutTop.height = trackThickness;
+            game.physics.arcade.enable(boundOutTop);
+            boundOutTop.body.immovable = true;
+
+            boundOutBottom.width = gameWidth;
+            boundOutBottom.height = trackThickness;
+            game.physics.arcade.enable(boundOutBottom);
+            boundOutBottom.body.immovable = true;
+
+            boundOutLeft.width = trackThickness;
+            boundOutLeft.height = gameHeight;
+            game.physics.arcade.enable(boundOutLeft);
+            boundOutLeft.body.immovable = true;
+
+            boundOutRight.width = trackThickness;
+            boundOutRight.height = gameHeight;
+            game.physics.arcade.enable(boundOutRight);
+            boundOutRight.body.immovable = true;
+
+
+            boundInTop.width = gameWidth - 2 * trackThickness - 2 * trackWidth;
+            boundInTop.height = trackThickness;
+            game.physics.arcade.enable(boundInTop);
+            boundInTop.body.immovable = true;
+
+            boundInBottom.width = gameWidth - 2 * trackThickness - 2 * trackWidth;
+            boundInBottom.height = trackThickness;
+            game.physics.arcade.enable(boundInBottom);
+            boundInBottom.body.immovable = true;
+
+            boundInLeft.width = trackThickness;
+            boundInLeft.height = gameHeight - 2 * trackThickness - 2 * trackWidth;
+            game.physics.arcade.enable(boundInLeft);
+            boundInLeft.body.immovable = true;
+
+            boundInRight.width = trackThickness;
+            boundInRight.height = gameHeight - 2 * trackThickness - 2 * trackWidth;
+            game.physics.arcade.enable(boundInRight);
+            boundInRight.body.immovable = true;
+        }
+
+        function update() {
+            if (cars == null) {
+                return
+            }
+
+            game.physics.arcade.collide(cars, track, carCrashed);
+
+            cars.forEach(car => {
+                const index = cars.getChildIndex(car)
+                const sensors = carsSensors[index]
+                const carSpeed = carsSpeed[index]
+                sensors.map(sensor => {
+                    sensor[0].fromAngle(car.x, car.y, car.angle * Math.PI / 180 - sensor[1], sensorLength)
+                })
+                const carPoint = new Phaser.Point(car.x, car.y)
+
+                let minDiss = sensors.map(sensor => {
+                    return sensorToDistance(sensor[0], tracks, carPoint)
+                })
+                carsMinDiss[index] = minDiss
+
+                inference(index)
+                game.physics.arcade.velocityFromRotation(car.rotation - Math.PI / 2, carSpeed, car.body.velocity);
+            })
+        }
+
+        function sensorToDistance(sensor, tracks, carPoint) {
+            intersects = tracks.map(line => {
+                return sensor.intersects(line);
+            })
+            distances = intersects.map(intersect => {
+                try {
+                    return intersect.distance(carPoint)
+                } catch {
+                    return undefined
+                }
+            })
+            distances = distances.filter(function (el) {
+                return el != null;
+            });
+            const minDis = Math.min.apply(Math, distances)
+            return minDis
+        }
+
+        function carCrashed(car, track) {
+            const index = cars.getChildIndex(car)
+            carsSpeed[index] = 0
+            // if (!carCrashedOrder.includes(index)) {                
+            //     carCrashedOrder.push(index)
+
+            //     if (carCrashedOrder.length == numOfCars) {
+            //         bestCarIndices = carCrashedOrder.splice(-2, 2);
+            //         startNewGeneration()
+            //     }
+            // }
+        }
+
+        function render() {
+            if (cars == null) {
+                return
+            }
+
+            game.debug.text('Select 2 best cars', 110, 120)
+            game.debug.text('then press F', 110, 135)
+            game.debug.text(`Generation: ${generation}`, 110, 150)
+            cars.forEach(car => {
+                const index = cars.getChildIndex(car)
+                let sensors = carsSensors[index]
+                sensors.map((sensor, sensorIndex) => {
+                    const tmpLine = new Phaser.Line()
+                    const startPoint = sensor[0].start
+                    tmpLine.fromAngle(startPoint.x, startPoint.y, sensor[0].angle, carsMinDiss[index][sensorIndex])
+                    game.debug.geom(tmpLine, 'red');
+                })
+            })
+        }
+
+        function steerLeft(carIndex) {
+            const carSpeed = carsSpeed[carIndex]
+            const car = cars.getChildAt(carIndex)
+            steer = 1 * carSpeed / 100
+            if (steer > maxSteer) {
+                steer = maxSteer
+            }
+            car.body.rotation -= steer
+        }
+
+        function steerRight(carIndex) {
+            const carSpeed = carsSpeed[carIndex]
+            const car = cars.getChildAt(carIndex)
+            steer = 1 * carSpeed / 100
+            if (steer > maxSteer) {
+                steer = maxSteer
+            }
+            car.body.rotation += steer
+        }
+
+        function throttle(carIndex) {
+            const carSpeed = carsSpeed[carIndex]
+            if (carSpeed < maxSpeed) {
+                carsSpeed[carIndex] += 5
+            }
+        }
+
+        function brake(carIndex) {
+            const carSpeed = carsSpeed[carIndex]
+            if (carsSpeed > 15) {
+                carsSpeed[carIndex] -= 15
+            } else if (carSpeed > 0) {
+                carsSpeed[carIndex] = 0
+            }
+        }
+
+        function drag(carIndex) {
+            const carSpeed = carsSpeed[carIndex]
+            if (carSpeed > 0) {
+                carsSpeed[carIndex] -= 5
+            }
+        }
+
+        function inference(carIndex) {
+            const inputData = carsMinDiss[carIndex].slice()
+            const carSpeed = carsSpeed[carIndex]
+            inputData.push(carSpeed)
+            const output = inferModel(inputData, carsGenes[carIndex])
+            const { engine, steer } = output
+
+            switch (engine) {
+                case 0:
+                    throttle(carIndex)
+                    break;
+                case 1:
+                    brake(carIndex)
+                    break;
+                default:
+                    drag(carIndex)
+            }
+
+            switch (steer) {
+                case 0:
+                    steerLeft(carIndex)
+                    break;
+                case 1:
+                    steerRight(carIndex)
+                    break;
+            }
+        }
+
+        function inferModel(inputData, gene) {
+                const output = tf.tidy(() => {
+                    const input = tf.tensor(inputData, [1, 6], 'float32')
+                    const {w1, b1, w21, b21, w22, b22} = gene
+
+                    const maxVal = tf.tensor([sensorLength, sensorLength, sensorLength, sensorLength, sensorLength, maxSpeed], [1, 6])
+                    const norm = input.minimum(maxVal).div(maxVal)
+                    const h1 = (norm.matMul(w1)).add(b1).relu()
+                    const o1 = (h1.matMul(w21)).add(b21)
+                    const o2 = (h1.matMul(w22)).add(b22)
+                    const softmax1 = o1.softmax()
+                    const softmax2 = o2.softmax()
+                    const o = {
+                        engine: softmax1.argMax(1).dataSync()[0],
+                        steer: softmax2.argMax(1).dataSync()[0]
+                    }
+                    return o
+                })
+                
+                return output
+        }
+
+        function onDown(car) {
+            const index = cars.getChildIndex(car)            
+            if (bestCarIndices.includes(index)) {
+                return
+            }
+            if (bestCarIndices.length == 2) {
+                bestCarIndices.shift()
+            }
+            bestCarIndices.push(index)
+
+            console.log(bestCarIndices)
+        }
+
+        function startNewGeneration() {
+            // while (bestCarIndices.length != 2) {
+            //     const index = Math.floor(Math.random() * 10);   
+            //     if (bestCarIndices.includes(index)) {
+            //         continue
+            //     }
+            //     bestCarIndices.push(index)
+            // }
+            console.log('Start new generation')
+
+            const parentsGenes = bestCarIndices.map(index => {
+                return carsGenes[index]
+            })
+
+            cars.destroy()
+            carsMinDiss = []
+            carsSpeed = []
+            carsGenes = []
+            carsSensors = []
+            carCrashedOrder = []
+
+            let combination = 0
+            const numOfCombination = 8
+            let mutationIndex = 0
+            for (i = 0; i < numOfCars; i += 1) {
+                carsSpeed.push(0)
+
+                let sensors = [
+                    [new Phaser.Line(), 0],
+                    [new Phaser.Line(), Math.PI / 4],
+                    [new Phaser.Line(), Math.PI / 2],
+                    [new Phaser.Line(), Math.PI * 3 / 4],
+                    [new Phaser.Line(), Math.PI],
+                ]
+                carsSensors.push(sensors)
+                carsMinDiss.push([])
+                if (combination < numOfCombination) {
+                    let crossOverCode = combination.toString(2)
+                    crossOverCode = '0'.repeat(3 - crossOverCode.length) + crossOverCode
+                    console.log(crossOverCode)
+                    const { w1, b1} = parentsGenes[parseInt(crossOverCode[0])]
+                    const { w21, b21} = parentsGenes[parseInt(crossOverCode[1])]
+                    const { w22, b22} = parentsGenes[parseInt(crossOverCode[2])]                    
+                    const gene = {
+                        w1: w1, b1: b1,
+                        w21: w21, b21: b21,
+                        w22: w22, b22: b22
+                    }
+                    carsGenes.push(gene)
+                    combination += 1
+                } else {  
+                    const parentGene = parentsGenes[mutationIndex]     
+                    const gene = tf.tidy(() => {
+                        const w1 = tf.randomUniform(parentGene.w1.shape, -maxMutation, maxMutation)
+                        const b1 = tf.randomUniform(parentGene.b1.shape, -maxMutation, maxMutation)
+                        const w21 = tf.randomUniform(parentGene.w21.shape, -maxMutation, maxMutation)
+                        const b21 = tf.randomUniform(parentGene.b21.shape, -maxMutation, maxMutation)
+                        const w22 = tf.randomUniform(parentGene.w22.shape, -maxMutation, maxMutation)
+                        const b22 = tf.randomUniform(parentGene.b22.shape, -maxMutation, maxMutation)
+                        const tmpGene = {}
+                        tmpGene.w1 = parentGene.w1.add(w1).maximum(tf.zeros(w1.shape)).minimum(tf.ones(w1.shape))
+                        tmpGene.b1 = parentGene.b1.add(b1).maximum(tf.zeros(b1.shape)).minimum(tf.ones(b1.shape))
+                        tmpGene.w21 = parentGene.w21.add(w21).maximum(tf.zeros(w21.shape)).minimum(tf.ones(w21.shape))
+                        tmpGene.b21 = parentGene.b21.add(b21).maximum(tf.zeros(b21.shape)).minimum(tf.ones(b21.shape))
+                        tmpGene.w22 = parentGene.w22.add(w22).maximum(tf.zeros(w22.shape)).minimum(tf.ones(w22.shape))
+                        tmpGene.b22 = parentGene.b22.add(b22).maximum(tf.zeros(b22.shape)).minimum(tf.ones(b22.shape))
+                        return tmpGene
+                    })
+                    
+                   
+                    carsGenes.push(gene)
+
+                    if (mutationIndex == 0) {
+                        mutationIndex = 1
+                    } else {
+                        mutationIndex = 0
+                    }
+                }
+
+            }
+            bestCarIndices = []
+
+            createCars()
+            generation += 1
+        }
+    </script>
+</body>
+</html>
